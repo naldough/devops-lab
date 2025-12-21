@@ -12,6 +12,7 @@ env:
   AWS_REGION: us-east-1
   PROJECT_NAME: devops-lab
   INSTANCE_NAME_TAG: devops-lab-ec2
+  
 
 jobs:
   deploy:
