@@ -1,4 +1,4 @@
-api.yourdomain.com {
+:80 {
   encode gzip
   reverse_proxy api:8080
 }

@@ -1,67 +1,61 @@
-name: Deploy API
+name: Build and Deploy API
 
 on:
   push:
-    branches: ["main"]
-    paths:
-      - "app/**"
-      - "ops/**"
+    branches: [ "main" ]
+
+permissions:
+  id-token: write
+  contents: read
+
+env:
+  AWS_REGION: us-east-1
+  PROJECT_NAME: devops-lab
+  INSTANCE_NAME_TAG: devops-lab-ec2
 
 jobs:
   deploy:
     runs-on: ubuntu-latest
-
     steps:
-      - uses: actions/checkout@v4
+      - name: Checkout
+        uses: actions/checkout@v4
 
-      - name: Configure AWS creds
+      - name: Configure AWS credentials (OIDC)
         uses: aws-actions/configure-aws-credentials@v4
         with:
-          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
-          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
-          aws-region: ${{ secrets.AWS_REGION }}
+          role-to-assume: arn:aws:iam::816069160668:role/GitHubActions
+          aws-region: ${{ env.AWS_REGION }}
 
       - name: Login to ECR
+        uses: aws-actions/amazon-ecr-login@v2
+
+      - name: Build and Push image
         run: |
-          aws ecr get-login-password --region "${{ secrets.AWS_REGION }}" \
-            | docker login --username AWS --password-stdin \
-              "${{ secrets.AWS_ACCOUNT_ID }}.dkr.ecr.${{ secrets.AWS_REGION }}.amazonaws.com"
+          ACCOUNT_ID=$(aws sts get-caller-identity --query Account --output text)
+          REPO="${PROJECT_NAME}-api"
+          TAG="${GITHUB_SHA::7}"
+          IMAGE_URI="${ACCOUNT_ID}.dkr.ecr.${AWS_REGION}.amazonaws.com/${REPO}:${TAG}"
 
-      - name: Build & push image
-        env:
-          AWS_REGION: ${{ secrets.AWS_REGION }}
-          AWS_ACCOUNT_ID: ${{ secrets.AWS_ACCOUNT_ID }}
-          ECR_REPO_NAME: ${{ secrets.ECR_REPO_NAME }}
+          echo "IMAGE_URI=$IMAGE_URI" >> $GITHUB_ENV
+
+          docker build -t "$IMAGE_URI" ./app
+          docker push "$IMAGE_URI"
+
+      - name: Deploy via SSM
         run: |
-          IMAGE_URI="${AWS_ACCOUNT_ID}.dkr.ecr.${AWS_REGION}.amazonaws.com/${ECR_REPO_NAME}"
-          SHA="${GITHUB_SHA}"
-          BUILD_TIME="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
-
-          docker build \
-            --build-arg VERSION="1.0.0" \
-            --build-arg COMMIT_SHA="${SHA}" \
-            --build-arg BUILD_TIME="${BUILD_TIME}" \
-            -t "${IMAGE_URI}:${SHA}" -t "${IMAGE_URI}:latest" app
-
-          docker push "${IMAGE_URI}:${SHA}"
-          docker push "${IMAGE_URI}:latest"
-
-      - name: Restart service via SSM
-        env:
-          AWS_REGION: ${{ secrets.AWS_REGION }}
-          DOMAIN_NAME: ${{ secrets.DOMAIN_NAME }}
-        run: |
-          # You’ll paste your instance-id into infra output, or store it as a secret later.
-          # Quick method: after terraform apply, set INSTANCE_ID in repo secrets.
-          INSTANCE_ID="${{ secrets.INSTANCE_ID }}"
+          INSTANCE_ID=$(aws ec2 describe-instances \
+            --filters "Name=tag:Name,Values=${INSTANCE_NAME_TAG}" "Name=instance-state-name,Values=running" \
+            --query "Reservations[0].Instances[0].InstanceId" --output text)
 
           aws ssm send-command \
-            --region "${AWS_REGION}" \
-            --instance-ids "${INSTANCE_ID}" \
+            --instance-ids "$INSTANCE_ID" \
             --document-name "AWS-RunShellScript" \
-            --parameters commands='[
-              "cd /opt/devops-lab/ops",
-              "docker compose pull",
-              "docker compose up -d",
-              "curl -fsS http://localhost/health"
-            ]'
+            --comment "Deploy devops-lab API" \
+            --parameters commands="[
+              \"set -e\",
+              \"cd /home/ssm-user/devops-lab/ops\",
+              \"echo ECR_IMAGE_URI=${IMAGE_URI} > .env\",
+              \"docker compose --env-file .env pull api\",
+              \"docker compose --env-file .env up -d\",
+              \"docker image prune -f\"
+            ]"
