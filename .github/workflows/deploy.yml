@@ -13,7 +13,6 @@ env:
   PROJECT_NAME: devops-lab
   INSTANCE_NAME_TAG: devops-lab-ec2
   
-
 jobs:
   deploy:
     runs-on: ubuntu-latest
