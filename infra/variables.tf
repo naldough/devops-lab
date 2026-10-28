@@ -10,6 +10,6 @@ variable "project" {
 
 variable "instance_type" {
   type    = string
-  default = "t3.micro"
+  default = "t3.small" # 2 GB RAM: enough for K3s plus the API
 }
 

@@ -24,6 +24,8 @@ resource "aws_instance" "web" {
               dnf install -y docker
               systemctl enable docker
               systemctl start docker
+              # K3s (lightweight Kubernetes) - runs the API; Traefik ingress serves ports 80/443
+              curl -sfL https://get.k3s.io | INSTALL_K3S_SKIP_SELINUX_RPM=true INSTALL_K3S_EXEC="--write-kubeconfig-mode 644" sh -
               EOF
 
   tags = {

@@ -1,19 +1,20 @@
-# DevOps Lab — Go + Terraform + HTTPS
+# DevOps Lab — Go + Terraform + Kubernetes (K3s)
 
-A minimal end-to-end DevOps pipeline: a Go HTTP API deployed to AWS EC2 via Docker, with infrastructure managed by Terraform and CI/CD driven by GitHub Actions.
+A minimal end-to-end DevOps pipeline: a Go HTTP API deployed to a K3s Kubernetes cluster on AWS EC2, with infrastructure managed by Terraform and CI/CD driven by GitHub Actions. The goal is a small "internal cloud" lab for spinning up and testing environments on demand.
 
 ## Architecture
 
 ```
 GitHub Actions
-  ├── deploy.yml  → builds Docker image, pushes to ECR, deploys via SSM
+  ├── deploy.yml  → builds Docker image, pushes to ECR, rolls it out to K3s via SSM
   └── terraform.yml → plans on PRs, applies on merge to main
 
 AWS
   ├── ECR          → container registry
-  ├── EC2 (t3.micro, Amazon Linux 2023) → runs Docker Compose
-  │     ├── Caddy  → reverse proxy on :80, gzip, proxies to api:8080
-  │     └── API    → Go binary in distroless container
+  ├── EC2 (t3.small, Amazon Linux 2023) → runs K3s
+  │     ├── Traefik ingress → ports 80/443, routes api.ronaldoauguste.com
+  │     └── Deployment "api" → 2 replicas of the Go binary in a distroless,
+  │                             non-root container, with health probes
   └── IAM / VPC / Security Groups → managed by Terraform
 ```
 
@@ -22,7 +23,8 @@ AWS
 ```
 app/          Go API source + Dockerfile
 infra/        Terraform (VPC, EC2, ECR, IAM, Security Groups)
-ops/          Docker Compose + Caddyfile for the EC2 host
+k8s/          Kubernetes manifests (Deployment, Service, Ingress) + one-time setup.sh
+ops/          Previous Docker Compose + Caddy setup (kept for reference)
 .github/
   workflows/
     deploy.yml      CI/CD pipeline (build → push → SSM deploy)
@@ -66,9 +68,9 @@ terraform apply
 1. Checks out code and authenticates to AWS via OIDC (no stored credentials)
 2. Builds and pushes a Docker image to ECR, tagged with the short commit SHA
 3. Finds the running EC2 instance by tag and sends a deploy command via SSM:
-   - Pulls the new image
-   - Runs `docker compose up -d`
-   - Prunes old images
+   - Refreshes the ECR pull secret in the cluster (ECR tokens expire after 12 hours)
+   - Runs `kubectl set image` for a zero-downtime rolling update
+   - Waits for `kubectl rollout status` and fails the pipeline if the rollout fails
 
 **On PRs touching `infra/`:** runs `terraform fmt`, `validate`, and `plan`  
 **On merge to `main` touching `infra/`:** runs `terraform apply`
@@ -88,8 +90,33 @@ docker build -t devops-lab-api ./app
 docker run -p 8080:8080 devops-lab-api
 ```
 
+## Kubernetes (K3s)
+
+The API runs as a Deployment with 2 replicas in the `devops-lab` namespace:
+
+- Readiness and liveness probes on `/health`; Kubernetes restarts or reroutes around unhealthy pods
+- Rolling updates with `maxUnavailable: 0`, so a deploy never drops below 2 running pods
+- Hardened pod settings: non-root user, read-only root filesystem, all Linux capabilities dropped
+- Images pulled from private ECR through an `imagePullSecret`
+- Traefik (bundled with K3s) handles ingress for `api.ronaldoauguste.com`
+
+One-time migration from Docker Compose, on the instance:
+
+```bash
+sudo bash k8s/setup.sh
+```
+
+Useful commands:
+
+```bash
+kubectl -n devops-lab get pods -o wide
+kubectl -n devops-lab logs -l app=api --tail=20
+kubectl -n devops-lab rollout history deployment/api
+kubectl -n devops-lab rollout undo deployment/api
+```
+
 ## Deployment Notes
 
-The EC2 instance runs Docker Compose from `/home/ssm-user/devops-lab/ops`. The Caddyfile proxies all traffic on port 80 to the Go API container on port 8080 with gzip compression enabled.
+The previous setup ran Docker Compose from `/home/ssm-user/devops-lab/ops`, with Caddy proxying to the API and handling HTTPS. It is kept in `ops/` for reference. HTTPS on K3s (cert-manager + Let's Encrypt) is the next planned step.
 
 The Go binary is built with `-ldflags` to embed `version`, `commit_sha`, and `build_time` at build time, visible at `/version`.
