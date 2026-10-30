@@ -1,0 +1,53 @@
+name: Security Scan
+
+# Static security analysis of the infrastructure code:
+#  - tfsec scans the Terraform in infra/
+#  - Checkov scans the Terraform in infra/ and the Kubernetes manifests in k8s/
+# Findings are reported in the job log and summary without blocking merges (soft fail),
+# so known, accepted risks in this lab don't stop deploys. Switch soft_fail off to enforce.
+
+on:
+  pull_request:
+    paths: ["infra/**", "k8s/**", ".github/workflows/security-scan.yml"]
+  push:
+    branches: ["main"]
+    paths: ["infra/**", "k8s/**", ".github/workflows/security-scan.yml"]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  tfsec:
+    name: tfsec (Terraform)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Run tfsec
+        uses: aquasecurity/tfsec-action@v1.0.3
+        with:
+          working_directory: infra
+          soft_fail: true
+
+  checkov:
+    name: Checkov (Terraform + Kubernetes)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Checkov - Terraform
+        uses: bridgecrewio/checkov-action@v12
+        with:
+          directory: infra
+          framework: terraform
+          compact: true
+          soft_fail: true
+
+      - name: Checkov - Kubernetes manifests
+        uses: bridgecrewio/checkov-action@v12
+        with:
+          directory: k8s
+          framework: kubernetes
+          compact: true
+          soft_fail: true

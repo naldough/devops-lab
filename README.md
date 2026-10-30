@@ -75,6 +75,30 @@ terraform apply
 **On PRs touching `infra/`:** runs `terraform fmt`, `validate`, and `plan`  
 **On merge to `main` touching `infra/`:** runs `terraform apply`
 
+## Security Scanning
+
+Every pull request and push that touches `infra/` or `k8s/` runs two static scanners (`.github/workflows/security-scan.yml`):
+
+- **tfsec** scans the Terraform for AWS misconfigurations
+- **Checkov** scans the Terraform and the Kubernetes manifests
+
+They run in soft-fail mode: findings show in the job log without blocking deploys, so accepted lab risks don't stop the pipeline.
+
+**Fixed from the first scan:**
+
+- EC2 now requires IMDSv2 session tokens (blocks SSRF-style credential theft through the metadata service)
+- ECR scans every pushed image for known CVEs
+- Every security group rule has a description
+- Pods drop the service account token, use the `RuntimeDefault` seccomp profile, and have a CPU limit
+
+**Known and accepted for this lab (next candidates to fix):**
+
+- Ports 80/443 open to the internet: intended, it's a public web endpoint
+- Public subnet / public IP: single-instance lab with no load balancer
+- Root volume not encrypted: fixing it replaces the instance, planned for the next rebuild
+- VPC flow logs, detailed monitoring, KMS-encrypted ECR: skipped for cost
+- Mutable ECR tags: images are tagged by commit SHA; immutability would break re-running a failed deploy
+
 ## Local Development
 
 ```bash

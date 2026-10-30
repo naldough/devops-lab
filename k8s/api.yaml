@@ -30,9 +30,12 @@ spec:
     spec:
       imagePullSecrets:
         - name: ecr-creds   # refreshed on every deploy (ECR tokens last 12 hours)
+      automountServiceAccountToken: false   # the API never talks to the Kubernetes API
       securityContext:
         runAsNonRoot: true
         runAsUser: 65532
+        seccompProfile:
+          type: RuntimeDefault
       containers:
         - name: api
           image: IMAGE_PLACEHOLDER
@@ -46,6 +49,7 @@ spec:
               cpu: 50m
               memory: 32Mi
             limits:
+              cpu: 250m
               memory: 128Mi
           readinessProbe:
             httpGet:

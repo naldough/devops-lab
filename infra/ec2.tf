@@ -18,6 +18,12 @@ resource "aws_instance" "web" {
 
   associate_public_ip_address = true
 
+  # Require IMDSv2 session tokens (Checkov CKV_AWS_79 / tfsec aws-ec2-enforce-http-token-imds)
+  metadata_options {
+    http_endpoint = "enabled"
+    http_tokens   = "required"
+  }
+
   user_data = <<-EOF
               #!/bin/bash
               dnf update -y
